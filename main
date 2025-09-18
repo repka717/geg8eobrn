@@ -1,93 +1,159 @@
--- ServerScript (ServerScriptService)
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
+-- LocalScript (поместить в StarterGui или StarterPlayerScripts)
+-- Описание:
+--  * Создаёт простую UI-кнопку для отправки инвентаря игрока.
+--  * При нажатии FireServer отправляет только player.UserId (сервер обязан дополнительно проверить и собрать инвентарь).
+--  * Кнопка имеет cooldown, чтобы игрок не спамил запросы.
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
 
--- RemoteEvent для запроса от клиента
-local remote = Instance.new("RemoteEvent")
-remote.Name = "RequestSendInventoryToTelegram"
-remote.Parent = ReplicatedStorage
+-- Настройки
+local REMOTE_NAME = "RequestSendInventoryToTelegram" -- имя RemoteEvent в ReplicatedStorage
+local COOLDOWN = 30 -- сек между запросами (клиентская защита; сервер должен тоже валидировать)
 
--- Вставь сюда токен бота и chat_id (либо GUID/канал). Храни конфиденциально.
-local TELEGRAM_BOT_TOKEN = "7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo"
-local TELEGRAM_CHAT_ID = "1426122866" -- например, твой user_id или айди чата/канала
+-- Найдём remote (ожидаем при старте)
+local remote = ReplicatedStorage:WaitForChild(REMOTE_NAME, 10)
+if not remote then
+    warn("LocalScript: RemoteEvent '"..REMOTE_NAME.."' не найден в ReplicatedStorage")
+    return
+end
 
--- Функция форматирования и отправки в Telegram
-local function sendMessageToTelegram(text)
-    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "" then
-        warn("Telegram token not set")
-        return false, "no-token"
+-- Создаём UI (ScreenGui -> Frame -> Button, Label)
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "InventorySenderGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local frame = Instance.new("Frame")
+frame.Name = "Panel"
+frame.Size = UDim2.new(0, 260, 0, 100)
+frame.Position = UDim2.new(0, 20, 0.8, -120)
+frame.AnchorPoint = Vector2.new(0, 0)
+frame.BackgroundTransparency = 0.12
+frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+frame.BorderSizePixel = 0
+frame.Parent = screenGui
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, -20, 0, 28)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Text = "Inventory → Telegram"
+title.Font = Enum.Font.SourceSansBold
+title.TextSize = 18
+title.TextColor3 = Color3.fromRGB(230, 230, 230)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local btn = Instance.new("TextButton")
+btn.Name = "SendButton"
+btn.Size = UDim2.new(1, -20, 0, 36)
+btn.Position = UDim2.new(0, 10, 0, 40)
+btn.BackgroundColor3 = Color3.fromRGB(70, 120, 200)
+btn.AutoButtonColor = true
+btn.Text = "Send my inventory"
+btn.Font = Enum.Font.SourceSansSemibold
+btn.TextSize = 16
+btn.TextColor3 = Color3.fromRGB(255,255,255)
+btn.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Name = "StatusLabel"
+status.Size = UDim2.new(1, -20, 0, 14)
+status.Position = UDim2.new(0, 10, 0, 80)
+status.BackgroundTransparency = 1
+status.Text = ""
+status.Font = Enum.Font.SourceSans
+status.TextSize = 14
+status.TextColor3 = Color3.fromRGB(200,200,200)
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Parent = frame
+
+-- Логика cooldown и UI
+local lastRequest = 0
+local function setStatus(text)
+    status.Text = text or ""
+end
+
+local function setButtonEnabled(enabled)
+    btn.AutoButtonColor = enabled
+    btn.Active = enabled
+    if enabled then
+        -- плавный эффект восстановления кнопки
+        local tweenInfo = TweenInfo.new(0.2)
+        TweenService:Create(btn, tweenInfo, {BackgroundTransparency = 0}):Play()
+    else
+        btn.BackgroundTransparency = 0.35
     end
-    local url = ("https://api.telegram.org/bot%s/sendMessage"):format(TELEGRAM_BOT_TOKEN)
-    local payload = {
-        chat_id = TELEGRAM_CHAT_ID,
-        text = text,
-        parse_mode = "Markdown" -- или "HTML" по желанию
-    }
-    local body = HttpService:JSONEncode(payload)
-    local success, res = pcall(function()
-        return HttpService:PostAsync(url, body, Enum.HttpContentType.ApplicationJson)
+end
+
+setButtonEnabled(true)
+
+-- Обработчик нажатия
+btn.MouseButton1Click:Connect(function()
+    local now = tick()
+    if now - lastRequest < COOLDOWN then
+        local remaining = math.ceil(COOLDOWN - (now - lastRequest))
+        setStatus("Подожди "..remaining.." с.")
+        return
+    end
+
+    -- Обновляем UI сразу
+    lastRequest = now
+    setButtonEnabled(false)
+    setStatus("Отправляю запрос на сервер...")
+
+    -- Отправляем только свой UserId — сервер обязан проверить и собрать инвентарь сам
+    local success, err = pcall(function()
+        remote:FireServer(player.UserId)
     end)
+
     if not success then
-        warn("Telegram send failed:", res)
-        return false, res
+        warn("Failed to fire remote:", err)
+        setStatus("Ошибка отправки (локально).")
+        -- восстановим кнопку через некоторое время
+        delay(2, function()
+            setButtonEnabled(true)
+            setStatus("")
+        end)
+        return
     end
-    return true, res
-end
 
--- Собирает предметы из Backpack игрока
-local function collectBackpackItems(plr)
-    local items = {}
-    local backpack = plr:FindFirstChild("Backpack")
-    if not backpack then
-        return items
-    end
-    for _, item in ipairs(backpack:GetChildren()) do
-        table.insert(items, {
-            name = item.Name or "(no name)",
-            className = item.ClassName or ""
-        })
-    end
-    return items
-end
+    setStatus("Запрос отправлен. Ожидайте подтверждения от сервера.")
+    -- Клиентская отложенная отмена блокировки (вдруг сервер не ответит) — но основной rate-limit должен быть на сервере.
+    delay(COOLDOWN, function()
+        setButtonEnabled(true)
+        setStatus("")
+    end)
+end)
 
--- Форматирует текст сообщения для Telegram
-local function formatInventoryMessage(plr)
-    local items = collectBackpackItems(plr)
-    local lines = {}
-    table.insert(lines, ("*Inventory for %s* (id: %d)"):format(plr.Name, plr.UserId))
-    if #items == 0 then
-        table.insert(lines, "_(empty)_")
-    else
-        for i, it in ipairs(items) do
-            -- Экранируем Markdown-символы в имени, если надо — для простоты опускаем сложную экранизацию
-            table.insert(lines, ("%d. %s — `%s`"):format(i, it.name, it.className))
+-- Необязательная обработка ответа от сервера (если вы хотите уведомлять клиента)
+-- Предполагается, что сервер может посылать RemoteEvent/RemoteFunction обратно при успехе/ошибке.
+-- Если вы добавите RemoteEvent с именем "InventorySendResult" в ReplicatedStorage, можно слушать его:
+local resultRemote = ReplicatedStorage:FindFirstChild("InventorySendResult")
+if resultRemote and resultRemote:IsA("RemoteEvent") then
+    resultRemote.OnClientEvent:Connect(function(successFlag, message)
+        if successFlag then
+            setStatus("Успешно отправлено.")
+        else
+            setStatus("Ошибка: "..(message or "unknown"))
         end
-    end
-    return table.concat(lines, "\n")
+        -- сброс статуса через 4 сек
+        delay(4, function()
+            setStatus("")
+        end)
+    end)
 end
 
--- Обработка RemoteEvent от клиента
--- Security rule: клиент может просить отправить ТОЛЬКО свой инвентарь
-remote.OnServerEvent:Connect(function(playerRequester, requestedUserId)
-    -- Защита: игнорируем, если requestedUserId не совпадает с playerRequester.UserId
-    if type(requestedUserId) ~= "number" or requestedUserId ~= playerRequester.UserId then
-        warn("Unauthorized inventory send attempt by", playerRequester.Name)
-        return
-    end
-
-    local plr = Players:GetPlayerByUserId(requestedUserId)
-    if not plr then
-        warn("Player not found:", requestedUserId)
-        return
-    end
-
-    local text = formatInventoryMessage(plr)
-
-    local ok, res = sendMessageToTelegram(text)
-    if ok then
-        print("Inventory sent to Telegram for", plr.Name)
-    else
-        warn("Failed to send inventory:", res)
+-- Также поддержка быстрой отправки по клавише (F)
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.F then
+        btn:Activate() -- имитируем клик
     end
 end)
