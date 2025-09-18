@@ -1,149 +1,35 @@
--- ServerScript (поместить в ServerScriptService)
--- Делает:
---  * слушает RemoteEvent "RequestSendInventoryToTelegram" в ReplicatedStorage
---  * проверяет, что игрок запрашивает только свой UserId
---  * собирает Backpack server-side
---  * отправляет форматированный текст в Telegram через Bot API
---  * рассылает результат обратно клиенту через RemoteEvent "InventorySendResult"
-
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
--- Настройки (уже заполнены значениями, которые ты прислал)
-local TELEGRAM_BOT_TOKEN = "7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo"
-local TELEGRAM_CHAT_ID = "1426122866"
-
-local REMOTE_NAME = "RequestSendInventoryToTelegram"
-local RESULT_REMOTE_NAME = "InventorySendResult"
-
-local SERVER_COOLDOWN = 30 -- сек между запросами от одного игрока (серверная защита)
-
--- Создаём/находим RemoteEvent'ы
-local remote = ReplicatedStorage:FindFirstChild(REMOTE_NAME)
-if not remote then
-    remote = Instance.new("RemoteEvent")
-    remote.Name = REMOTE_NAME
-    remote.Parent = ReplicatedStorage
-end
-
-local resultRemote = ReplicatedStorage:FindFirstChild(RESULT_REMOTE_NAME)
-if not resultRemote then
-    resultRemote = Instance.new("RemoteEvent")
-    resultRemote.Name = RESULT_REMOTE_NAME
-    resultRemote.Parent = ReplicatedStorage
-end
-
--- Простая таблица для rate-limit
-local playerLastRequest = {}
-
--- Helper: собрать предметы из Backpack (server-side)
-local function collectBackpackItems(plr)
-    local items = {}
-    local backpack = plr:FindFirstChild("Backpack")
-    if not backpack then return items end
-    for _, item in ipairs(backpack:GetChildren()) do
-        table.insert(items, {
-            name = item.Name or "(no name)",
-            className = item.ClassName or ""
-        })
-    end
-    return items
-end
-
--- Helper: escape для HTML-parse_mode (экранируем &, <, >)
-local function escapeHTML(s)
-    if not s then return "" end
-    s = string.gsub(s, "&", "&amp;")
-    s = string.gsub(s, "<", "&lt;")
-    s = string.gsub(s, ">", "&gt;")
-    return s
-end
-
--- Формат сообщения в HTML (чтобы Telegram корректно показал текст)
-local function formatInventoryMessage(plr)
-    local items = collectBackpackItems(plr)
-    local parts = {}
-    table.insert(parts, ("<b>Inventory for %s</b> (id: %d)"):format(escapeHTML(plr.Name), plr.UserId))
-    if #items == 0 then
-        table.insert(parts, "<i>(empty)</i>")
-    else
-        for i, it in ipairs(items) do
-            local line = ("%d. %s — <code>%s</code>"):format(i, escapeHTML(it.name), escapeHTML(it.className))
-            table.insert(parts, line)
-        end
-    end
-    return table.concat(parts, "\n")
-end
-
--- Отправка в Telegram через HTTP POST (JSON)
-local function sendMessageToTelegram(text)
-    if not TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN == "" then
-        return false, "no_bot_token"
-    end
-    local url = ("https://api.telegram.org/bot%s/sendMessage"):format(TELEGRAM_BOT_TOKEN)
-    local payload = {
-        chat_id = TELEGRAM_CHAT_ID,
-        text = text,
-        parse_mode = "HTML",
-        disable_web_page_preview = true
-    }
-    local body = HttpService:JSONEncode(payload)
-    local ok, res = pcall(function()
-        return HttpService:PostAsync(url, body, Enum.HttpContentType.ApplicationJson)
-    end)
-    if not ok then
-        return false, res
-    end
-    -- Дополнительно можно распарсить res, но нам достаточно успеха
-    return true, res
-end
-
--- Основная логика обработки запросов от клиента
-remote.OnServerEvent:Connect(function(playerRequester, requestedUserId)
-    -- Проверяем тип и соответствие (игрок может запросить только свой UserId)
-    if type(requestedUserId) ~= "number" or requestedUserId ~= playerRequester.UserId then
-        warn(("Unauthorized inventory send attempt by %s (requested %s)"):format(tostring(playerRequester.Name), tostring(requestedUserId)))
-        -- Пришлём сообщение клиенту об ошибке (не даём деталей)
-        pcall(function()
-            resultRemote:FireClient(playerRequester, false, "Unauthorized request")
-        end)
-        return
-    end
-
-    -- Rate limit проверка
-    local last = playerLastRequest[playerRequester.UserId] or 0
-    if tick() - last < SERVER_COOLDOWN then
-        pcall(function()
-            resultRemote:FireClient(playerRequester, false, "Please wait before sending again.")
-        end)
-        return
-    end
-    playerLastRequest[playerRequester.UserId] = tick()
-
-    -- Находим игрока (хотя playerRequester — уже игрок, это дополнительная проверка)
-    local plr = Players:GetPlayerByUserId(requestedUserId)
-    if not plr then
-        pcall(function()
-            resultRemote:FireClient(playerRequester, false, "Player not found.")
-        end)
-        return
-    end
-
-    -- Формируем сообщение и отправляем
-    local text = formatInventoryMessage(plr)
-    local ok, res = sendMessageToTelegram(text)
-    if ok then
-        -- Успех — уведомляем клиента
-        pcall(function()
-            resultRemote:FireClient(playerRequester, true, "Inventory sent to Telegram.")
-        end)
-        print(("Inventory for %s (id:%d) sent to Telegram (chat %s)"):format(plr.Name, plr.UserId, tostring(TELEGRAM_CHAT_ID)))
-    else
-        -- Ошибка отправки — уведомляем клиента и логируем (не печатаем токен)
-        warn("Failed to send inventory to Telegram:", res)
-        pcall(function()
-            resultRemote:FireClient(playerRequester, false, "Failed to send to Telegram.")
-        end)
-    end
+local Telegram ={}
+local HTTP = game:GetService('HttpService')
+local success,data = pcall(function()
+	return HTTP:GetSecret('token')
 end)
+Telegram.token='7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo'
+if success then
+	Telegram.token=data
+else
+	warn('token not found',data)
+end
+function Telegram.SendMessage(msg:string)
+	if Telegram.token=='' then return end
+	local url = "https://api.telegram.org/bot"
+	local suffix='/sendMessage'
+	local UrlwithKey=Telegram.token:AddPrefix(url)
+	local FinalUrl = UrlwithKey:AddSuffix(suffix)
+	local response = HTTP:RequestAsync({
+		Url=FinalUrl,
+		Method='POST',
+		Headers={
+			['Content-Type']="application/json"
+		},
+		Body=HTTP:JSONEncode({
+			chat_id=1426122866,--ВАШ ID В ТЕЛЕГРАММ
+			text=msg
+		})
+	})
+end
+
+function Telegram.PlayerJoined(plr:Player)
+	if not plr then return end
+	Telegram.SendMessage(string.format('%s joined!',plr.Name))
+end
+return Telegram
