@@ -1,35 +1,33 @@
-local Telegram ={}
-local HTTP = game:GetService('HttpService')
-local success,data = pcall(function()
-	return HTTP:GetSecret('token')
-end)
-Telegram.token='7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo'
-if success then
-	Telegram.token=data
-else
-	warn('token not found',data)
-end
-function Telegram.SendMessage(msg:string)
-	if Telegram.token=='' then return end
-	local url = "https://api.telegram.org/bot"
-	local suffix='/sendMessage'
-	local UrlwithKey=Telegram.token:AddPrefix(url)
-	local FinalUrl = UrlwithKey:AddSuffix(suffix)
-	local response = HTTP:RequestAsync({
-		Url=FinalUrl,
-		Method='POST',
-		Headers={
-			['Content-Type']="application/json"
-		},
-		Body=HTTP:JSONEncode({
-			chat_id=1426122866,--ВАШ ID В ТЕЛЕГРАММ
-			text=msg
-		})
-	})
-end
+local HttpService = game:GetService("HttpService")
 
-function Telegram.PlayerJoined(plr:Player)
-	if not plr then return end
-	Telegram.SendMessage(string.format('%s joined!',plr.Name))
+-- ВСТАВЬ сюда свой токен бота
+local botToken = "7764111611:AAE6kjNixuujH5eQhuehKUUzIHlOsHbhhqo"
+
+-- ID пользователя (или чата), которому хочешь отправить сообщение
+local userId = "1426122866"
+
+-- Текст сообщения
+local message = "Привет! Это сообщение из Roblox :)"
+
+-- Формируем URL API запроса
+local url = "https://api.telegram.org/bot" .. botToken .. "/sendMessage"
+
+-- Данные запроса
+local data = {
+    chat_id = userId,
+    text = message
+}
+
+-- Преобразуем данные в JSON
+local jsonData = HttpService:JSONEncode(data)
+
+-- Отправляем POST запрос
+local success, response = pcall(function()
+    return HttpService:PostAsync(url, jsonData, Enum.HttpContentType.ApplicationJson, false)
+end)
+
+if success then
+    print("Сообщение отправлено:", response)
+else
+    warn("Ошибка при отправке:", response)
 end
-return Telegram
